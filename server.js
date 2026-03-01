@@ -8,7 +8,9 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: "http://localhost:4200" }));
+const allowedOrigin = process.env.CORS_ORIGIN || "http://localhost:4200";
+
+app.use(cors({ origin: allowedOrigin }));
 app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
