@@ -15,7 +15,7 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-app.post("/api/generate-script", async (req, res) => {
+app.post("/generate-script", async (req, res) => {
   try {
     const { userInput } = req.body;
 
