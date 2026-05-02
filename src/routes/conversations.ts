@@ -7,6 +7,8 @@ import { Conversation, type IConversation } from "../models/Conversation.js";
 import { Message, type IMessage } from "../models/Message.js";
 import { streamReply, type HistoryMessage } from "../services/gemini.js";
 import { generateAndPatchTitle } from "../services/title.js";
+import { logger } from "../logger.js";
+import { messagesRateLimit } from "../middleware/rateLimit.js";
 
 type ConversationLean = IConversation & { _id: Types.ObjectId };
 type MessageLean = IMessage & { _id: Types.ObjectId };
@@ -16,6 +18,18 @@ router.use(requireAuth);
 
 const createSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
+});
+
+const importSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        prompt: z.string().trim().min(1).max(4096),
+        response: z.string().trim().max(12288),
+      }),
+    )
+    .min(1)
+    .max(25),
 });
 
 const patchSchema = z.object({
@@ -88,9 +102,25 @@ router.get("/", async (req: Request, res: Response) => {
   res.json({ conversations: items.map(publicConversation), nextCursor });
 });
 
+const MAX_CONVERSATIONS = 200;
+
 // POST /conversations
 router.post("/", async (req: Request, res: Response) => {
   const body = createSchema.parse(req.body);
+
+  // Soft cap: auto-archive the oldest conversation when user hits the limit
+  const activeCount = await Conversation.countDocuments({ userId: req.userId, archived: false });
+  if (activeCount >= MAX_CONVERSATIONS) {
+    const oldest = await Conversation.findOne({ userId: req.userId, archived: false })
+      .sort({ updatedAt: 1 })
+      .select("_id");
+    if (oldest) {
+      await Conversation.updateOne(
+        { _id: oldest._id },
+        { $set: { archived: true, archivedAt: new Date() } },
+      );
+    }
+  }
 
   const conv = await Conversation.create({
     userId: req.userId,
@@ -98,6 +128,44 @@ router.post("/", async (req: Request, res: Response) => {
   });
 
   res.status(201).json({ conversation: publicConversation(conv.toObject() as ConversationLean) });
+});
+
+// POST /conversations/import  { items: [{ prompt, response }] }
+// One-time bulk import of legacy localStorage conversations.
+router.post("/import", async (req: Request, res: Response) => {
+  const body = importSchema.parse(req.body);
+
+  // Filter out pairs with no assistant response (aborted generations)
+  const validItems = body.items.filter((item) => item.response.length > 0);
+  if (validItems.length === 0) {
+    throw new HttpError(400, "No valid items to import");
+  }
+
+  const firstPrompt = validItems[0]!.prompt;
+  const title = firstPrompt.length > 50 ? firstPrompt.slice(0, 47) + "…" : firstPrompt;
+
+  const conv = await Conversation.create({ userId: req.userId, title });
+
+  const messageDocs = validItems.flatMap((item) => [
+    { conversationId: conv._id, userId: req.userId, role: "user" as const, content: item.prompt },
+    {
+      conversationId: conv._id,
+      userId: req.userId,
+      role: "assistant" as const,
+      content: item.response,
+    },
+  ]);
+
+  await Message.insertMany(messageDocs);
+  const messageCount = messageDocs.length;
+
+  await Conversation.updateOne(
+    { _id: conv._id },
+    { $set: { messageCount, lastMessageAt: new Date() } },
+  );
+
+  const updated = await Conversation.findById(conv._id).lean<ConversationLean>();
+  res.status(201).json({ conversation: publicConversation(updated!) });
 });
 
 type IdParams = { id: string };
@@ -117,7 +185,10 @@ router.patch("/:id", async (req: Request<IdParams>, res: Response) => {
 
   const conv = await findOwned(req.params.id, req.userId!);
   if (body.title !== undefined) conv.title = body.title;
-  if (body.archived !== undefined) conv.archived = body.archived;
+  if (body.archived !== undefined) {
+    conv.archived = body.archived;
+    conv.archivedAt = body.archived ? new Date() : undefined;
+  }
   await conv.save();
 
   res.json({ conversation: publicConversation(conv.toObject() as ConversationLean) });
@@ -163,11 +234,18 @@ const postMessageSchema = z.object({
 
 const MAX_ASSISTANT_CHARS = 12_288; // 12 KB hard cap per system design
 
+const MAX_MESSAGES_PER_CONVERSATION = 50;
+
 // POST /conversations/:id/messages  { content }
 // Streams the Gemini reply and persists both messages.
-router.post("/:id/messages", async (req: Request<IdParams>, res: Response) => {
+router.post("/:id/messages", messagesRateLimit, async (req: Request<IdParams>, res: Response) => {
   const body = postMessageSchema.parse(req.body);
   const conv = await findOwned(req.params.id, req.userId!);
+
+  if (conv.messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
+    throw new HttpError(403, "Conversation is full. Start a new chat to continue.");
+  }
+
   const isFirstExchange = conv.messageCount === 0;
 
   // Load prior turns for Gemini context (newest-first → reverse to chronological)
@@ -219,7 +297,7 @@ router.post("/:id/messages", async (req: Request<IdParams>, res: Response) => {
     }
   } catch (err) {
     truncated = true;
-    console.error("Gemini stream error:", err);
+    logger.error({ err }, "Gemini stream error");
   }
 
   // Persist assistant reply (skip if nothing was generated)

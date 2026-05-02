@@ -12,6 +12,7 @@ import {
 } from "../services/tokens.js";
 import { requireAuth } from "../middleware/auth.js";
 import { HttpError } from "../middleware/error.js";
+import { authRateLimit } from "../middleware/rateLimit.js";
 
 const REFRESH_COOKIE = "sw_refresh";
 
@@ -49,7 +50,7 @@ const loginSchema = z.object({
 
 const router = Router();
 
-router.post("/signup", async (req: Request, res: Response) => {
+router.post("/signup", authRateLimit, async (req: Request, res: Response) => {
   const body = signupSchema.parse(req.body);
   const passwordHash = await hashPassword(body.password);
 
@@ -81,7 +82,7 @@ router.post("/signup", async (req: Request, res: Response) => {
   res.status(201).json({ user: publicUser(user), accessToken });
 });
 
-router.post("/login", async (req: Request, res: Response) => {
+router.post("/login", authRateLimit, async (req: Request, res: Response) => {
   const body = loginSchema.parse(req.body);
 
   const user = await User.findOne({ email: body.email });

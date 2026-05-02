@@ -2,7 +2,10 @@ import express, { type Request, type Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
+import helmet from "helmet";
+import { pinoHttp } from "pino-http";
 import { config } from "./config.js";
+import { logger } from "./logger.js";
 import { connectDb } from "./db.js";
 import authRouter from "./routes/auth.js";
 import conversationsRouter from "./routes/conversations.js";
@@ -14,6 +17,8 @@ async function main(): Promise<void> {
 
   const app = express();
 
+  app.use(helmet());
+  app.use(pinoHttp({ logger, redact: ["req.headers.authorization"] }));
   app.use(
     cors({
       origin: config.CORS_ORIGIN,
@@ -39,11 +44,11 @@ async function main(): Promise<void> {
   app.use(errorHandler);
 
   const server = app.listen(config.PORT, () => {
-    console.log(`Server is running on port ${config.PORT}`);
+    logger.info(`Server is running on port ${config.PORT}`);
   });
 
   const shutdown = async (signal: string) => {
-    console.log(`${signal} received, shutting down`);
+    logger.info(`${signal} received, shutting down`);
     server.close(() => {
       void mongoose.disconnect().then(() => process.exit(0));
     });
@@ -53,6 +58,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("Failed to start server:", err);
+  logger.error({ err }, "Failed to start server");
   process.exit(1);
 });

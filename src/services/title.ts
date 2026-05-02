@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { Types } from "mongoose";
 import { config } from "../config.js";
+import { logger } from "../logger.js";
 import { Conversation } from "../models/Conversation.js";
 
 const genAI = new GoogleGenerativeAI(config.GEMINI_API_KEY);
@@ -24,6 +25,6 @@ export async function generateAndPatchTitle(
       await Conversation.updateOne({ _id: conversationId }, { $set: { title } });
     }
   } catch (err) {
-    console.error("Title generation failed:", err);
+    logger.error({ err }, "Title generation failed");
   }
 }
