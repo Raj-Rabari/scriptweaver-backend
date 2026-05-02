@@ -6,6 +6,7 @@ import { HttpError } from "../middleware/error.js";
 import { Conversation, type IConversation } from "../models/Conversation.js";
 import { Message, type IMessage } from "../models/Message.js";
 import { streamReply, type HistoryMessage } from "../services/gemini.js";
+import { generateAndPatchTitle } from "../services/title.js";
 
 type ConversationLean = IConversation & { _id: Types.ObjectId };
 type MessageLean = IMessage & { _id: Types.ObjectId };
@@ -167,6 +168,7 @@ const MAX_ASSISTANT_CHARS = 12_288; // 12 KB hard cap per system design
 router.post("/:id/messages", async (req: Request<IdParams>, res: Response) => {
   const body = postMessageSchema.parse(req.body);
   const conv = await findOwned(req.params.id, req.userId!);
+  const isFirstExchange = conv.messageCount === 0;
 
   // Load prior turns for Gemini context (newest-first → reverse to chronological)
   const priorDocs = await Message.find({ conversationId: conv._id })
@@ -242,6 +244,11 @@ router.post("/:id/messages", async (req: Request<IdParams>, res: Response) => {
   );
 
   if (!res.writableEnded) res.end();
+
+  // Async title generation — fires after response is sent; errors are swallowed inside.
+  if (isFirstExchange && assistantInserted) {
+    void generateAndPatchTitle(conv._id, body.content);
+  }
 });
 
 export default router;
