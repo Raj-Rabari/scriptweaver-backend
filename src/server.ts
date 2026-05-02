@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { config } from "./config.js";
 import { connectDb } from "./db.js";
 import authRouter from "./routes/auth.js";
+import conversationsRouter from "./routes/conversations.js";
 import generateRouter from "./routes/generate.js";
 import { errorHandler, notFound } from "./middleware/error.js";
 
@@ -30,8 +31,9 @@ async function main(): Promise<void> {
     });
   });
 
-  app.use("/auth", authRouter);
-  app.use("/", generateRouter);
+  app.use("/api/auth", authRouter);
+  app.use("/api/conversations", conversationsRouter);
+  app.use("/api", generateRouter);
 
   app.use(notFound);
   app.use(errorHandler);
