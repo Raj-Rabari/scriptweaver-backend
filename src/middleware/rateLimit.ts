@@ -14,8 +14,7 @@ export const authRateLimit = rateLimit({
 export const messagesRateLimit = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  keyGenerator: (req: Request) =>
-    req.userId ?? ipKeyGenerator(req) ?? "anonymous",
+  keyGenerator: (req: Request) => req.userId ?? req.ip ?? "anonymous",
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many messages. Please slow down." },
