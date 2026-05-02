@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { HttpError } from "../middleware/error.js";
 import { Conversation, type IConversation } from "../models/Conversation.js";
 import { Message, type IMessage } from "../models/Message.js";
+import { streamReply, type HistoryMessage } from "../services/gemini.js";
 
 type ConversationLean = IConversation & { _id: Types.ObjectId };
 type MessageLean = IMessage & { _id: Types.ObjectId };
@@ -153,6 +154,94 @@ router.get("/:id/messages", async (req: Request<IdParams>, res: Response) => {
   const nextBefore = hasMore && first ? first._id.toString() : null;
 
   res.json({ messages: items.map(publicMessage), nextBefore });
+});
+
+const postMessageSchema = z.object({
+  content: z.string().trim().min(1).max(4096),
+});
+
+const MAX_ASSISTANT_CHARS = 12_288; // 12 KB hard cap per system design
+
+// POST /conversations/:id/messages  { content }
+// Streams the Gemini reply and persists both messages.
+router.post("/:id/messages", async (req: Request<IdParams>, res: Response) => {
+  const body = postMessageSchema.parse(req.body);
+  const conv = await findOwned(req.params.id, req.userId!);
+
+  // Load prior turns for Gemini context (newest-first → reverse to chronological)
+  const priorDocs = await Message.find({ conversationId: conv._id })
+    .sort({ _id: -1 })
+    .limit(20)
+    .lean<MessageLean[]>();
+  const history: HistoryMessage[] = priorDocs.reverse().map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  // Persist user message before streaming begins
+  const userMsg = await Message.create({
+    conversationId: conv._id,
+    userId: req.userId,
+    role: "user",
+    content: body.content,
+  });
+
+  // Commit to a streaming response — errors after this point end silently
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Transfer-Encoding", "chunked");
+
+  let buffer = "";
+  let truncated = false;
+  let clientGone = false;
+
+  req.on("close", () => {
+    if (!res.writableEnded) clientGone = true;
+  });
+
+  try {
+    for await (const chunk of streamReply(body.content, history)) {
+      if (clientGone) {
+        truncated = true;
+        break;
+      }
+      if (buffer.length + chunk.length >= MAX_ASSISTANT_CHARS) {
+        const remaining = MAX_ASSISTANT_CHARS - buffer.length;
+        const trimmed = chunk.slice(0, remaining);
+        buffer += trimmed;
+        res.write(trimmed);
+        truncated = true;
+        break;
+      }
+      buffer += chunk;
+      res.write(chunk);
+    }
+  } catch (err) {
+    truncated = true;
+    console.error("Gemini stream error:", err);
+  }
+
+  // Persist assistant reply (skip if nothing was generated)
+  const assistantInserted = buffer.length > 0;
+  if (assistantInserted) {
+    await Message.create({
+      conversationId: conv._id,
+      userId: req.userId,
+      role: "assistant",
+      content: buffer,
+      truncated,
+    });
+  }
+
+  // Update conversation counters — timestamps plugin handles updatedAt
+  await Conversation.updateOne(
+    { _id: conv._id },
+    {
+      $inc: { messageCount: assistantInserted ? 2 : 1 },
+      $set: { lastMessageAt: userMsg.createdAt },
+    },
+  );
+
+  if (!res.writableEnded) res.end();
 });
 
 export default router;
