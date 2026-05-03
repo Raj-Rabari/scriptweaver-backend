@@ -36,9 +36,9 @@ async function main(): Promise<void> {
     });
   });
 
-  app.use("/api/auth", authRouter);
-  app.use("/api/conversations", conversationsRouter);
-  app.use("/api", generateRouter);
+  app.use("/auth", authRouter);
+  app.use("/conversations", conversationsRouter);
+  app.use("/", generateRouter);
 
   app.use(notFound);
   app.use(errorHandler);
