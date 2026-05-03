@@ -1,4 +1,9 @@
-import { Router, type Request, type Response, type CookieOptions } from "express";
+import {
+  Router,
+  type Request,
+  type Response,
+  type CookieOptions,
+} from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import { User, type UserDoc } from "../models/User.js";
@@ -21,7 +26,7 @@ function refreshCookieOptions(expiresAt?: Date): CookieOptions {
     httpOnly: true,
     secure: config.isProd,
     sameSite: "lax",
-    path: "/auth",
+    path: "/",
   };
   if (config.COOKIE_DOMAIN) opts.domain = config.COOKIE_DOMAIN;
   if (expiresAt) opts.expires = expiresAt;
@@ -65,7 +70,10 @@ router.post("/signup", authRateLimit, async (req: Request, res: Response) => {
       quota: { conversations: 0, messages: 0 },
     });
   } catch (err) {
-    if (err instanceof Error && (err as Error & { code?: number }).code === 11000) {
+    if (
+      err instanceof Error &&
+      (err as Error & { code?: number }).code === 11000
+    ) {
       throw new HttpError(409, "Email already registered");
     }
     throw err;
@@ -78,7 +86,11 @@ router.post("/signup", authRateLimit, async (req: Request, res: Response) => {
   });
   const accessToken = signAccessToken(user._id.toString());
 
-  res.cookie(REFRESH_COOKIE, refresh.raw, refreshCookieOptions(refresh.expiresAt));
+  res.cookie(
+    REFRESH_COOKIE,
+    refresh.raw,
+    refreshCookieOptions(refresh.expiresAt),
+  );
   res.status(201).json({ user: publicUser(user), accessToken });
 });
 
@@ -105,7 +117,11 @@ router.post("/login", authRateLimit, async (req: Request, res: Response) => {
   });
   const accessToken = signAccessToken(user._id.toString());
 
-  res.cookie(REFRESH_COOKIE, refresh.raw, refreshCookieOptions(refresh.expiresAt));
+  res.cookie(
+    REFRESH_COOKIE,
+    refresh.raw,
+    refreshCookieOptions(refresh.expiresAt),
+  );
   res.json({ user: publicUser(user), accessToken });
 });
 
@@ -131,7 +147,11 @@ router.post("/refresh", async (req: Request, res: Response) => {
   }
 
   const accessToken = signAccessToken(result.userId.toString());
-  res.cookie(REFRESH_COOKIE, result.next.raw, refreshCookieOptions(result.next.expiresAt));
+  res.cookie(
+    REFRESH_COOKIE,
+    result.next.raw,
+    refreshCookieOptions(result.next.expiresAt),
+  );
   res.json({ accessToken });
 });
 
